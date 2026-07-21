@@ -160,11 +160,12 @@ def looks_like_dscan(text: str) -> bool:
     return tabbed >= max(3, int(len(lines) * 0.6))
 
 
-def upload_dscan(base: str, key: str, text: str) -> int:
+def upload_dscan(base: str, key: str, text: str, system: str = "") -> int:
     """Ship count on success (may be 0 — structures-only scans still store),
-    or -1 if the paste wasn't accepted as a d-scan."""
+    or -1 if the paste wasn't accepted as a d-scan. `system` tags the scan so
+    the board can tie the hulls to who's in that system's Local."""
     try:
-        r = _post(f"{base}/api/intel/dscan", key, {"text": text})
+        r = _post(f"{base}/api/intel/dscan", key, {"text": text, "system": system})
         return int(r.get("ships", 0)) if r.get("ok") else -1
     except Exception:  # noqa: BLE001
         return -1
@@ -681,7 +682,7 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
                         append("upload", f"probe: {n} sites in {parked}")
                 elif looks_like_dscan(text):
                     last_clip[0] = text
-                    n = upload_dscan(base, key, text)
+                    n = upload_dscan(base, key, text, parked)
                     if n >= 0:
                         append("upload", f"d-scan: {n} ship(s)" if n
                                else "d-scan: sent (no ships on scan)")
