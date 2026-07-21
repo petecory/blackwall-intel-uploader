@@ -1,0 +1,4 @@
+# No third-party dependencies — standard library only.
+# Build a Windows .exe with:
+#   pip install pyinstaller
+#   pyinstaller --onefile eve_intel_uploader.py

@@ -1,0 +1,7 @@
+# Your personal upload token + settings live here — never commit it.
+eve_intel_uploader.ini
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec

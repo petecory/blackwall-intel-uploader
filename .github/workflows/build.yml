@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    tags: ["v*"]        # tag a release (e.g. v1.0.0) to build + attach binaries
+  workflow_dispatch: {}  # or run it by hand from the Actions tab
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --name eve-intel-uploader eve_intel_uploader.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eve-intel-uploader-windows
+          path: dist/eve-intel-uploader.exe
+
+  debian:
+    runs-on: ubuntu-latest
+    container: python:3.12-slim-bookworm       # Debian bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y binutils
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --name eve-intel-uploader-debian eve_intel_uploader.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eve-intel-uploader-debian
+          path: dist/eve-intel-uploader-debian
+
+  rhel:
+    runs-on: ubuntu-latest
+    container: rockylinux:9                     # RHEL 9 compatible
+    steps:
+      - uses: actions/checkout@v4
+      - run: dnf install -y python3 python3-pip binutils
+      - run: python3 -m pip install pyinstaller
+      - run: python3 -m PyInstaller --onefile --name eve-intel-uploader-rhel eve_intel_uploader.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eve-intel-uploader-rhel
+          path: dist/eve-intel-uploader-rhel
+
+  release:
+    needs: [windows, debian, rhel]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
