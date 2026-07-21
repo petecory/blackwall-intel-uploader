@@ -63,6 +63,7 @@ def load_config() -> configparser.ConfigParser:
     m.setdefault("channels", "")
     m.setdefault("logdir", str(chatlog_dir()))
     m.setdefault("verbosity", "normal")
+    m.setdefault("watch_clipboard", "yes")
     return cfg
 
 
@@ -138,6 +139,23 @@ def upload(base: str, key: str, channel: str, lines: list[str]) -> int:
         return int(r.get("stored", 0))
     except Exception:  # noqa: BLE001
         return -1  # signal a transient failure to the caller
+
+
+def looks_like_dscan(text: str) -> bool:
+    """Cheap client-side check so we only upload d-scan-shaped clipboards."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 3:
+        return False
+    tabbed = sum(1 for ln in lines if ln.count("\t") >= 2)
+    return tabbed >= max(3, int(len(lines) * 0.6))
+
+
+def upload_dscan(base: str, key: str, text: str) -> int:
+    try:
+        r = _post(f"{base}/api/intel/dscan", key, {"text": text})
+        return int(r.get("ships", 0)) if r.get("ok") else 0
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _launch_cmd(extra: str = "") -> str:
@@ -416,7 +434,15 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
 
     ttk.Checkbutton(bottom, text="Start with system", variable=startup_var,
                     command=toggle_startup).pack(side="left")
-    tk.Label(bottom, text="  (minimises to tray)", fg="#64748b", bg="#0f172a").pack(side="left")
+
+    watch_var = tk.BooleanVar(value=cfg["main"].get("watch_clipboard", "yes") == "yes")
+
+    def toggle_watch() -> None:
+        cfg["main"]["watch_clipboard"] = "yes" if watch_var.get() else "no"
+        save_config(cfg)
+
+    ttk.Checkbutton(bottom, text="Watch clipboard for d-scans", variable=watch_var,
+                    command=toggle_watch).pack(side="left", padx=(12, 0))
 
     def set_status(text: str) -> None:
         colors = {"Connected": "#22c55e", "Stopped": "#64748b", "Connecting…": "#f59e0b"}
@@ -469,6 +495,25 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
             pass
         root.after(250, pump)
 
+    last_clip = [""]
+
+    def watch_clipboard() -> None:
+        # Only reads the clipboard when the box is ticked; uploads a new paste
+        # once, when it's d-scan-shaped. Nothing else on the clipboard is sent.
+        if watch_var.get():
+            try:
+                text = root.clipboard_get()
+            except Exception:  # noqa: BLE001 - empty / non-text clipboard
+                text = ""
+            if text and text != last_clip[0] and looks_like_dscan(text):
+                last_clip[0] = text
+                key = cfg["main"].get("key", "")
+                if key:
+                    n = upload_dscan(cfg["main"].get("base", DEFAULT_BASE), key, text)
+                    if n > 0:
+                        append("upload", f"d-scan: {n} ships")
+        root.after(1500, watch_clipboard)
+
     # system tray (optional — needs pystray + pillow)
     tray = {"icon": None}
 
@@ -511,6 +556,7 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
     refresh_paired()
     start_worker()
     root.after(250, pump)
+    root.after(1500, watch_clipboard)
     if minimized:
         root.after(200, hide_to_tray)
     root.mainloop()

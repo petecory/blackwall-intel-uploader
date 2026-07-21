@@ -14,7 +14,9 @@ one short, dependency-free Python file you can read top to bottom.
 3. **Run the app** (double-click the binary, or `python eve_intel_uploader.py`).
    A window opens: paste the pairing code, tick the intel channels it found in
    your logs, and you're live. It minimises to the **system tray** and keeps
-   uploading while you play.
+   uploading while you play. It also **watches your clipboard for d-scans** —
+   Ctrl-A, Ctrl-C in EVE's d-scan window and the scan posts to the board,
+   classified (toggle it off in the window if you'd rather it didn't).
 
 It never stores a long-lived secret — pairing swaps a short code for a key that
 **rotates itself** against the server.
