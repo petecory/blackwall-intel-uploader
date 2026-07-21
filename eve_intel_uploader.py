@@ -52,10 +52,20 @@ def chatlog_dir() -> Path:
     return Path(os.path.expanduser("~")) / "Documents" / "EVE" / "logs" / "Chatlogs"
 
 
+# Serialises config writes: the GUI thread (option toggles) and the Worker
+# thread (key rotation) both save, and two writers racing on the same file used
+# to corrupt it — which lost the key and bounced you back to pairing. With this
+# lock + the atomic replace below, toggling an option can never force a re-pair.
+_config_lock = threading.Lock()
+
+
 def load_config() -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     if CONFIG_FILE.exists():
-        cfg.read(CONFIG_FILE)
+        try:
+            cfg.read(CONFIG_FILE)
+        except configparser.Error:
+            pass  # a corrupt file falls back to defaults rather than crashing
     if "main" not in cfg:
         cfg["main"] = {}
     m = cfg["main"]
@@ -71,8 +81,23 @@ def load_config() -> configparser.ConfigParser:
 
 
 def save_config(cfg: configparser.ConfigParser) -> None:
-    with open(CONFIG_FILE, "w") as fh:
-        cfg.write(fh)
+    # Atomic + locked: write a temp file, fsync, then replace. A crash or a
+    # concurrent write can never leave a half-written .ini (which would drop the
+    # key and force a re-pair), so options can be toggled freely while running.
+    with _config_lock:
+        tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+        try:
+            with open(tmp, "w") as fh:
+                cfg.write(fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, CONFIG_FILE)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 
 def detect_channels(logdir: Path) -> list[str]:
