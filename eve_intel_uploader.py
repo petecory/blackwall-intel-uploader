@@ -64,6 +64,8 @@ def load_config() -> configparser.ConfigParser:
     m.setdefault("logdir", str(chatlog_dir()))
     m.setdefault("verbosity", "normal")
     m.setdefault("watch_clipboard", "yes")
+    m.setdefault("archive_local", "no")
+    m.setdefault("local_system", "")
     return cfg
 
 
@@ -158,6 +160,14 @@ def upload_dscan(base: str, key: str, text: str) -> int:
         return 0
 
 
+def upload_local(base: str, key: str, system: str, lines: list[str]) -> int:
+    try:
+        r = _post(f"{base}/api/intel/local", key, {"system": system, "lines": lines})
+        return int(r.get("stored", 0)) if r.get("ok") else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _launch_cmd(extra: str = "") -> str:
     if getattr(sys, "frozen", False):
         base = f'"{sys.executable}"'
@@ -242,6 +252,8 @@ class Worker(threading.Thread):
         for ch in self.channels():
             f = latest_log_for(logdir, ch)
             state[ch] = (str(f), f.stat().st_size) if f else ("", 0)
+        lf = latest_log_for(logdir, "Local")
+        local_state = (str(lf), lf.stat().st_size) if lf else ("", 0)
         last_rotate = time.time()
         while not self._stop.is_set():
             if time.time() - last_rotate > ROTATE_HOURS * 3600:
@@ -270,6 +282,22 @@ class Worker(threading.Thread):
                         self.on_event("upload", f"[{ch}] {n} line(s)")
                     elif n < 0:
                         self.on_event("error", f"[{ch}] upload failed (retrying)")
+            # Archive the home system's Local chat, if switched on.
+            if self.cfg["main"].get("archive_local") == "yes" and self.cfg["main"].get("local_system"):
+                lf = latest_log_for(logdir, "Local")
+                if lf is not None:
+                    lp, lpos = local_state
+                    if str(lf) != lp:
+                        lp, lpos = str(lf), 0
+                    try:
+                        llines, lnew = read_new(lf, lpos)
+                        local_state = (str(lf), lnew)
+                        if llines:
+                            m = upload_local(self.base, key, self.cfg["main"]["local_system"], llines)
+                            if m > 0:
+                                self.on_event("upload", f"[Local {self.cfg['main']['local_system']}] {m} line(s)")
+                    except OSError:
+                        pass
             self._stop.wait(POLL_SECONDS)
         self.on_event("status", "Stopped")
 
@@ -443,6 +471,23 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
 
     ttk.Checkbutton(bottom, text="Watch clipboard for d-scans", variable=watch_var,
                     command=toggle_watch).pack(side="left", padx=(12, 0))
+
+    local_row = tk.Frame(root, bg="#0f172a")
+    local_row.pack(fill="x", padx=14, pady=(0, 10))
+    local_var = tk.BooleanVar(value=cfg["main"].get("archive_local", "no") == "yes")
+    local_sys = tk.StringVar(value=cfg["main"].get("local_system", ""))
+
+    def save_local() -> None:
+        cfg["main"]["archive_local"] = "yes" if local_var.get() else "no"
+        cfg["main"]["local_system"] = local_sys.get().strip()
+        save_config(cfg)
+
+    ttk.Checkbutton(local_row, text="Archive Local chat (parked alt) — system:",
+                    variable=local_var, command=save_local).pack(side="left")
+    le = tk.Entry(local_row, textvariable=local_sys, width=10, bg="#0b1220", fg="#e2e8f0",
+                  insertbackground="#e2e8f0", relief="flat")
+    le.pack(side="left", padx=(4, 0), ipady=2)
+    le.bind("<FocusOut>", lambda e: save_local())
 
     def set_status(text: str) -> None:
         colors = {"Connected": "#22c55e", "Stopped": "#64748b", "Connecting…": "#f59e0b"}
