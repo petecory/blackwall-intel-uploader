@@ -136,10 +136,17 @@ def rotate(base: str, key: str) -> str | None:
         return key
 
 
+AUTH_DEAD = -401  # upload() sentinel: the server rejected the key — must re-pair
+
+
 def upload(base: str, key: str, channel: str, lines: list[str]) -> int:
     try:
         r = _post(f"{base}/api/intel/ingest", key, {"channel": channel, "lines": lines})
         return int(r.get("stored", 0))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return AUTH_DEAD  # key is genuinely dead — trigger a re-pair
+        return -1  # other HTTP error — transient, keep the key and retry
     except Exception:  # noqa: BLE001
         return -1  # signal a transient failure to the caller
 
@@ -306,13 +313,14 @@ class Worker(threading.Thread):
         if not key:
             self.on_event("error", "Not paired yet.")
             return
-        rk = rotate(self.base, key)
-        if rk is None:
-            self.on_event("reauth", "Key no longer valid — re-pair.")
-            return
-        key = rk
-        self.cfg["main"]["key"] = key
-        save_config(self.cfg)
+        # Deliberately NO rotate at startup. Rotating on every launch is what left
+        # keys stale between restarts: if the app was killed (or a fresh pair's
+        # first rotate hiccuped) between rotate() and save_config(), the on-disk
+        # key ended up one step behind the server, so the next launch 401'd and
+        # bricked back to the pairing screen — "paired but stuck, catches nothing".
+        # A freshly-paired or previously-saved key is already valid for uploads,
+        # so we just connect. Rotation still happens on the long timer below, and
+        # a genuinely dead key is caught when an actual upload is rejected (401).
         self.on_event("status", "Connected")
         logdir = Path(self.cfg["main"].get("logdir") or chatlog_dir())
         state: dict[str, tuple[str, int]] = {}
@@ -347,6 +355,9 @@ class Worker(threading.Thread):
                 state[ch] = (str(f), new_pos)
                 if lines:
                     n = upload(self.base, key, ch, lines)
+                    if n == AUTH_DEAD:
+                        self.on_event("reauth", "Key no longer valid — re-pair.")
+                        return
                     if n > 0:
                         self.on_event("upload", f"[{ch}] {n} line(s)")
                     elif n < 0:
