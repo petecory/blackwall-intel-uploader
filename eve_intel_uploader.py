@@ -66,6 +66,7 @@ def load_config() -> configparser.ConfigParser:
     m.setdefault("watch_clipboard", "yes")
     m.setdefault("archive_local", "no")
     m.setdefault("local_system", "")
+    m.setdefault("only_when_eve_focused", "yes")
     return cfg
 
 
@@ -166,6 +167,60 @@ def upload_local(base: str, key: str, system: str, lines: list[str]) -> int:
         return int(r.get("stored", 0)) if r.get("ok") else 0
     except Exception:  # noqa: BLE001
         return 0
+
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .'\-]{2,36}$")
+
+
+def looks_like_member_list(text: str) -> bool:
+    """Plain character names, one per line — a Local member-list copy. Distinct
+    from d-scan (which has tabs) and from prose (validated server-side too)."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2 or any("\t" in ln for ln in lines):
+        return False
+    named = sum(1 for ln in lines if _NAME_RE.match(ln) and len(ln.split()) <= 3)
+    return named >= 2 and named >= len(lines) * 0.8
+
+
+def upload_presence(base: str, key: str, system: str, names: list[str]) -> int:
+    try:
+        r = _post(f"{base}/api/intel/local-presence", key, {"system": system, "names": names})
+        return int(r.get("present", 0)) if r.get("ok") else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def eve_is_focused() -> bool:
+    """True if EVE is the foreground window — so we only read the clipboard when
+    you're actually in the game, never while you're copying things elsewhere.
+    Fail-open: if we can't tell (no tools/permission), don't block."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+
+            u = ctypes.windll.user32
+            hwnd = u.GetForegroundWindow()
+            n = u.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u.GetWindowTextW(hwnd, buf, n + 1)
+            return "eve" in buf.value.lower()
+        if sys.platform == "darwin":
+            import subprocess
+
+            out = subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to name of first process whose frontmost is true'],
+                capture_output=True, text=True, timeout=1)
+            return out.returncode == 0 and "eve" in out.stdout.lower()
+        import subprocess
+
+        out = subprocess.run(["xdotool", "getactivewindow", "getwindowname"],
+                             capture_output=True, text=True, timeout=1)
+        if out.returncode == 0:
+            return "eve" in out.stdout.lower()
+    except Exception:  # noqa: BLE001
+        pass
+    return True
 
 
 def _launch_cmd(extra: str = "") -> str:
@@ -469,8 +524,16 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
         cfg["main"]["watch_clipboard"] = "yes" if watch_var.get() else "no"
         save_config(cfg)
 
-    ttk.Checkbutton(bottom, text="Watch clipboard for d-scans", variable=watch_var,
+    ttk.Checkbutton(bottom, text="Watch clipboard (d-scan + local)", variable=watch_var,
                     command=toggle_watch).pack(side="left", padx=(12, 0))
+    focus_var = tk.BooleanVar(value=cfg["main"].get("only_when_eve_focused", "yes") == "yes")
+
+    def toggle_focus() -> None:
+        cfg["main"]["only_when_eve_focused"] = "yes" if focus_var.get() else "no"
+        save_config(cfg)
+
+    ttk.Checkbutton(bottom, text="only when EVE focused", variable=focus_var,
+                    command=toggle_focus).pack(side="left", padx=(6, 0))
 
     local_row = tk.Frame(root, bg="#0f172a")
     local_row.pack(fill="x", padx=14, pady=(0, 10))
@@ -543,20 +606,30 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
     last_clip = [""]
 
     def watch_clipboard() -> None:
-        # Only reads the clipboard when the box is ticked; uploads a new paste
-        # once, when it's d-scan-shaped. Nothing else on the clipboard is sent.
-        if watch_var.get():
+        # Reads the clipboard only when the box is ticked AND (by default) EVE is
+        # the focused window — so nothing you copy elsewhere is ever looked at.
+        gate = cfg["main"].get("only_when_eve_focused", "yes") == "yes"
+        if watch_var.get() and (not gate or eve_is_focused()):
             try:
                 text = root.clipboard_get()
             except Exception:  # noqa: BLE001 - empty / non-text clipboard
                 text = ""
-            if text and text != last_clip[0] and looks_like_dscan(text):
-                last_clip[0] = text
-                key = cfg["main"].get("key", "")
-                if key:
-                    n = upload_dscan(cfg["main"].get("base", DEFAULT_BASE), key, text)
+            base = cfg["main"].get("base", DEFAULT_BASE)
+            key = cfg["main"].get("key", "")
+            if text and text != last_clip[0] and key:
+                if looks_like_dscan(text):
+                    last_clip[0] = text
+                    n = upload_dscan(base, key, text)
                     if n > 0:
                         append("upload", f"d-scan: {n} ships")
+                elif (cfg["main"].get("archive_local") == "yes"
+                      and cfg["main"].get("local_system")
+                      and looks_like_member_list(text)):
+                    last_clip[0] = text
+                    names = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                    m = upload_presence(base, key, cfg["main"]["local_system"], names)
+                    if m > 0:
+                        append("upload", f"local: {m} in {cfg['main']['local_system']}")
         root.after(1500, watch_clipboard)
 
     # system tray (optional — needs pystray + pillow)
