@@ -190,6 +190,18 @@ def upload_presence(base: str, key: str, system: str, names: list[str]) -> int:
         return 0
 
 
+def looks_like_probe(text: str) -> bool:
+    return "Cosmic Anomaly" in text or "Cosmic Signature" in text
+
+
+def upload_probe(base: str, key: str, system: str, text: str) -> int:
+    try:
+        r = _post(f"{base}/api/intel/probe", key, {"system": system, "text": text})
+        return int(r.get("sites", 0)) if r.get("ok") else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def eve_is_focused() -> bool:
     """True if EVE is the foreground window — so we only read the clipboard when
     you're actually in the game, never while you're copying things elsewhere.
@@ -616,20 +628,24 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
                 text = ""
             base = cfg["main"].get("base", DEFAULT_BASE)
             key = cfg["main"].get("key", "")
+            parked = cfg["main"].get("local_system", "") if cfg["main"].get("archive_local") == "yes" else ""
             if text and text != last_clip[0] and key:
-                if looks_like_dscan(text):
+                if looks_like_probe(text) and parked:
+                    last_clip[0] = text
+                    n = upload_probe(base, key, parked, text)
+                    if n > 0:
+                        append("upload", f"probe: {n} sites in {parked}")
+                elif looks_like_dscan(text):
                     last_clip[0] = text
                     n = upload_dscan(base, key, text)
                     if n > 0:
                         append("upload", f"d-scan: {n} ships")
-                elif (cfg["main"].get("archive_local") == "yes"
-                      and cfg["main"].get("local_system")
-                      and looks_like_member_list(text)):
+                elif parked and looks_like_member_list(text):
                     last_clip[0] = text
                     names = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                    m = upload_presence(base, key, cfg["main"]["local_system"], names)
+                    m = upload_presence(base, key, parked, names)
                     if m > 0:
-                        append("upload", f"local: {m} in {cfg['main']['local_system']}")
+                        append("upload", f"local: {m} in {parked}")
         root.after(1500, watch_clipboard)
 
     # system tray (optional — needs pystray + pillow)
