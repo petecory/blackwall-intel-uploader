@@ -308,7 +308,7 @@ class Worker(threading.Thread):
             return
         rk = rotate(self.base, key)
         if rk is None:
-            self.on_event("error", "Stored key rejected — re-pair from the dashboard.")
+            self.on_event("reauth", "Key no longer valid — re-pair.")
             return
         key = rk
         self.cfg["main"]["key"] = key
@@ -325,11 +325,13 @@ class Worker(threading.Thread):
         while not self._stop.is_set():
             if time.time() - last_rotate > ROTATE_HOURS * 3600:
                 nk = rotate(self.base, key)
-                if nk:
-                    key = nk
-                    self.cfg["main"]["key"] = key
-                    save_config(self.cfg)
-                    self.on_event("info", "Key rotated")
+                if nk is None:
+                    self.on_event("reauth", "Key no longer valid — re-pair.")
+                    return
+                key = nk
+                self.cfg["main"]["key"] = key
+                save_config(self.cfg)
+                self.on_event("info", "Key rotated")
                 last_rotate = time.time()
             for ch in self.channels():
                 f = latest_log_for(logdir, ch)
@@ -407,16 +409,33 @@ def run_cli(cfg: configparser.ConfigParser, verbosity: str) -> None:
             tag = {"upload": "↑", "error": "!", "status": "•", "info": "·"}.get(kind, " ")
             print(f"  {tag} {text}")
 
+    reauth = {"needed": False}
+
+    def cli_event(kind, text):
+        if kind == "reauth":
+            reauth["needed"] = True
+        show(kind, text)
+
     print(f"Uploader running — watching {m['channels']}. Ctrl-C to stop.")
-    w = Worker(cfg, show)
-    w.start()
-    try:
-        while w.is_alive():
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        print("\nStopping…")
-        w.stop()
-        w.join(timeout=5)
+    while True:
+        w = Worker(cfg, cli_event)
+        w.start()
+        try:
+            while w.is_alive():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            print("\nStopping…")
+            w.stop(); w.join(timeout=5)
+            return
+        if not reauth["needed"]:
+            return
+        # Key was rejected — re-pair inline rather than making them edit the ini.
+        reauth["needed"] = False
+        code = input("\nKey rejected. Enter a new pairing code (or Ctrl-C to quit): ").strip()
+        key = pair(m.get("base", DEFAULT_BASE), code)
+        if not key:
+            print("Pairing failed."); return
+        m["key"] = key; save_config(cfg); print("Re-paired — resuming.")
 
 
 # --------------------------------------------------------------------------- #
@@ -451,6 +470,7 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
     status_dot.pack(side="left")
     status_lbl = tk.Label(top, text="Not paired", fg="#cbd5e1", bg="#0f172a", font=("Segoe UI", 11))
     status_lbl.pack(side="left", padx=6)
+    ttk.Button(top, text="Re-pair", command=lambda: do_reauth()).pack(side="right")
 
     body = tk.Frame(root, bg="#0f172a")
     body.pack(fill="both", expand=True, padx=14, pady=6)
@@ -604,12 +624,23 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
 
     ttk.Button(prow, text="Pair", command=do_pair).pack(side="left", padx=(6, 0))
 
+    def do_reauth() -> None:
+        cfg["main"]["key"] = ""
+        save_config(cfg)
+        refresh_paired()
+        set_status("Re-pair needed")
+        append("error", "Enter a new pairing code from the dashboard.")
+
     def pump() -> None:
         try:
             while True:
                 kind, text = events.get_nowait()
                 if kind == "status":
                     set_status(text)
+                elif kind == "reauth":
+                    append("error", text)
+                    do_reauth()
+                    continue
                 append(kind, text)
         except Exception:  # noqa: BLE001 - queue empty
             pass
