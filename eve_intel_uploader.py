@@ -161,11 +161,13 @@ def looks_like_dscan(text: str) -> bool:
 
 
 def upload_dscan(base: str, key: str, text: str) -> int:
+    """Ship count on success (may be 0 — structures-only scans still store),
+    or -1 if the paste wasn't accepted as a d-scan."""
     try:
         r = _post(f"{base}/api/intel/dscan", key, {"text": text})
-        return int(r.get("ships", 0)) if r.get("ok") else 0
+        return int(r.get("ships", 0)) if r.get("ok") else -1
     except Exception:  # noqa: BLE001
-        return 0
+        return -1
 
 
 def upload_local(base: str, key: str, system: str, lines: list[str]) -> int:
@@ -680,8 +682,9 @@ def run_gui(cfg: configparser.ConfigParser, minimized: bool = False) -> None:
                 elif looks_like_dscan(text):
                     last_clip[0] = text
                     n = upload_dscan(base, key, text)
-                    if n > 0:
-                        append("upload", f"d-scan: {n} ships")
+                    if n >= 0:
+                        append("upload", f"d-scan: {n} ship(s)" if n
+                               else "d-scan: sent (no ships on scan)")
                 elif parked and looks_like_member_list(text):
                     last_clip[0] = text
                     names = [ln.strip() for ln in text.splitlines() if ln.strip()]
