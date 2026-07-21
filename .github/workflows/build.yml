@@ -2,8 +2,8 @@ name: build
 
 on:
   push:
-    tags: ["v*"]        # tag a release (e.g. v1.0.0) to build + attach binaries
-  workflow_dispatch: {}  # or run it by hand from the Actions tab
+    tags: ["v*"]
+  workflow_dispatch: {}
 
 jobs:
   windows:
@@ -12,8 +12,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pyinstaller
-      - run: pyinstaller --onefile --name eve-intel-uploader eve_intel_uploader.py
+      - run: pip install pyinstaller pystray pillow
+      # --windowed = GUI app, no console window on double-click.
+      - run: pyinstaller --onefile --windowed --name eve-intel-uploader eve_intel_uploader.py
       - uses: actions/upload-artifact@v4
         with:
           name: eve-intel-uploader-windows
@@ -21,11 +22,11 @@ jobs:
 
   debian:
     runs-on: ubuntu-latest
-    container: python:3.12-slim-bookworm       # Debian bookworm
+    container: python:3.12-slim-bookworm
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y binutils
-      - run: pip install pyinstaller
+      - run: apt-get update && apt-get install -y binutils python3-tk
+      - run: pip install pyinstaller pystray pillow
       - run: pyinstaller --onefile --name eve-intel-uploader-debian eve_intel_uploader.py
       - uses: actions/upload-artifact@v4
         with:
@@ -34,11 +35,11 @@ jobs:
 
   rhel:
     runs-on: ubuntu-latest
-    container: rockylinux:9                     # RHEL 9 compatible
+    container: rockylinux:9
     steps:
       - uses: actions/checkout@v4
-      - run: dnf install -y python3 python3-pip binutils
-      - run: python3 -m pip install pyinstaller
+      - run: dnf install -y python3 python3-pip python3-tkinter binutils
+      - run: python3 -m pip install pyinstaller pystray pillow
       - run: python3 -m PyInstaller --onefile --name eve-intel-uploader-rhel eve_intel_uploader.py
       - uses: actions/upload-artifact@v4
         with:

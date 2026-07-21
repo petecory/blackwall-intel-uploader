@@ -1,4 +1,6 @@
-# No third-party dependencies — standard library only.
-# Build a Windows .exe with:
+# Runtime deps for the GUI + system tray. The --cli mode is standard-library only.
+pystray>=0.19
+pillow>=10.0
+# Build a binary with:
 #   pip install pyinstaller
-#   pyinstaller --onefile eve_intel_uploader.py
+#   pyinstaller --onefile --windowed eve_intel_uploader.py   (Windows: no console)

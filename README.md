@@ -7,21 +7,27 @@ It only ever **reads your own local EVE chat-log files** — it does not touch t
 game, your account, or ESI, and sends nothing back to EVE. The whole thing is
 one short, dependency-free Python file you can read top to bottom.
 
-## Quick start (any OS, with Python 3.12+)
+## Quick start
 
 1. **Turn on chat logging in EVE**: `Esc → General Settings → Log Chat to File`.
 2. **Get a pairing code**: on the dashboard, open **Live intel → Connect uploader**.
-3. **Run it**:
-   ```
-   python eve_intel_uploader.py
-   ```
-   It asks for the pairing code, then **lists the chat channels it found in your
-   logs** so you can pick which intel ones to watch. Everything saves to
-   `eve_intel_uploader.ini` next to the script.
+3. **Run the app** (double-click the binary, or `python eve_intel_uploader.py`).
+   A window opens: paste the pairing code, tick the intel channels it found in
+   your logs, and you're live. It minimises to the **system tray** and keeps
+   uploading while you play.
 
-Leave it running while you play — new intel uploads automatically. It never
-stores a long-lived secret: pairing swaps a short code for a key that **rotates
-itself** against the server.
+It never stores a long-lived secret — pairing swaps a short code for a key that
+**rotates itself** against the server.
+
+### Power users / headless
+
+```
+eve_intel_uploader --cli        run in the terminal (standard-library only)
+eve_intel_uploader --quiet      errors only
+eve_intel_uploader --verbose    everything
+```
+The GUI/tray need `pystray` + `pillow` (bundled in the binaries; `pip install -r
+requirements.txt` for the script). `--cli` needs neither.
 
 ## Prebuilt binaries (no Python needed)
 
