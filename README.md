@@ -50,6 +50,17 @@ PyInstaller is per-OS — build the Windows exe on Windows, the Linux binary on
 Linux. The Debian and RHEL binaries differ only by glibc; use the one matching
 your distro family.
 
+## Run at startup & console output
+
+```
+eve_intel_uploader --install-startup   # launch automatically at login (quiet)
+eve_intel_uploader --remove-startup    # undo
+eve_intel_uploader --quiet             # errors only
+eve_intel_uploader --verbose           # everything (per-poll, rotations)
+```
+Startup uses your OS's normal mechanism — the Startup folder on Windows, an XDG
+autostart entry on Linux — and runs quietly in the background.
+
 ## Pointing at a different dashboard
 
 By default it uploads to Blackwall Fortress. To use your own instance, edit the

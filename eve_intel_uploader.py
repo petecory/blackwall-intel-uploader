@@ -28,6 +28,73 @@ from pathlib import Path
 DEFAULT_BASE = "https://blackwallfortress.space"
 POLL_SECONDS = 3
 ROTATE_HOURS = 12
+STARTUP_NAME = "eve-intel-uploader"
+
+# Console verbosity. A message is shown when its level <= the active level:
+#   quiet   = errors only          normal = errors + uploads/status
+#   verbose = everything (per-poll, rotations, file rolls)
+_LEVELS = {"quiet": 0, "normal": 1, "verbose": 2}
+VERBOSITY = "normal"
+
+
+def log(msg: str, level: str = "normal") -> None:
+    if _LEVELS.get(level, 1) <= _LEVELS.get(VERBOSITY, 1):
+        print(msg)
+
+
+def _launch_cmd() -> str:
+    """Command that starts this uploader, quoted for a startup entry."""
+    if getattr(sys, "frozen", False):  # a PyInstaller .exe / binary
+        return f'"{sys.executable}"'
+    script = os.path.abspath(__file__)
+    py = sys.executable
+    if sys.platform.startswith("win"):  # pythonw = no console window on autostart
+        pyw = py[:-len("python.exe")] + "pythonw.exe" if py.lower().endswith("python.exe") else py
+        return f'"{pyw}" "{script}"'
+    return f'"{py}" "{script}"'
+
+
+def install_startup() -> None:
+    cmd = _launch_cmd() + " --quiet"
+    if sys.platform.startswith("win"):
+        startup = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup"
+        startup.mkdir(parents=True, exist_ok=True)
+        entry = startup / f"{STARTUP_NAME}.cmd"
+        entry.write_text(f'@echo off\r\nstart "" /min {cmd}\r\n')
+        print(f"Installed. It will start with Windows (minimised):\n  {entry}")
+    else:
+        autostart = Path(os.path.expanduser("~/.config/autostart"))
+        autostart.mkdir(parents=True, exist_ok=True)
+        entry = autostart / f"{STARTUP_NAME}.desktop"
+        entry.write_text(
+            "[Desktop Entry]\nType=Application\nName=EVE Intel Uploader\n"
+            f"Exec={cmd}\nX-GNOME-Autostart-enabled=true\nTerminal=false\n"
+        )
+        print(f"Installed. It will start at login:\n  {entry}")
+
+
+def remove_startup() -> None:
+    if sys.platform.startswith("win"):
+        entry = Path(os.environ.get("APPDATA", "")) / f"Microsoft/Windows/Start Menu/Programs/Startup/{STARTUP_NAME}.cmd"
+    else:
+        entry = Path(os.path.expanduser(f"~/.config/autostart/{STARTUP_NAME}.desktop"))
+    if entry.exists():
+        entry.unlink()
+        print(f"Removed from startup:\n  {entry}")
+    else:
+        print("Not installed to startup — nothing to remove.")
+
+
+def print_help() -> None:
+    print(
+        "EVE Intel Uploader\n\n"
+        "  (no args)           run and upload intel\n"
+        "  --quiet             errors only\n"
+        "  --verbose           show everything (per-poll, rotations)\n"
+        "  --install-startup   run automatically at login (uses --quiet)\n"
+        "  --remove-startup    undo that\n"
+        "  --help              this text\n"
+    )
 CONFIG_FILE = Path(__file__).with_name("eve_intel_uploader.ini")
 
 
@@ -100,6 +167,8 @@ def load_config() -> configparser.ConfigParser:
         m["channels"] = pick_channels(Path(m.get("logdir") or chatlog_dir()))
     if not m.get("logdir"):
         m["logdir"] = str(chatlog_dir())
+    if not m.get("verbosity"):
+        m["verbosity"] = "normal"  # quiet | normal | verbose (or use --quiet/--verbose)
     with open(CONFIG_FILE, "w") as fh:
         cfg.write(fh)
     return cfg
@@ -120,7 +189,7 @@ def pair(base: str, code: str) -> str | None:
         r = _post(f"{base}/api/intel/pair", None, {"code": code})
         return r.get("key") if r.get("ok") else None
     except Exception as exc:  # noqa: BLE001
-        print(f"  ! pair failed: {exc}")
+        log(f"  ! pair failed: {exc}", "quiet")
         return None
 
 
@@ -163,15 +232,31 @@ def upload(base: str, key: str, channel: str, lines: list[str]) -> int:
         r = _post(f"{base}/api/intel/ingest", key, {"channel": channel, "lines": lines})
         return r.get("stored", 0)
     except Exception as exc:  # noqa: BLE001
-        print(f"  ! upload failed: {exc}")
+        log(f"  ! upload failed: {exc}", "quiet")
         return 0
 
 
 def main() -> None:
+    args = sys.argv[1:]
+    if "--help" in args or "-h" in args:
+        print_help(); return
+    if "--install-startup" in args:
+        install_startup(); return
+    if "--remove-startup" in args:
+        remove_startup(); return
+
     cfg = load_config()
     base = cfg["main"].get("base", DEFAULT_BASE)
     key = cfg["main"]["key"]
     channels = [c.strip() for c in cfg["main"]["channels"].split(",") if c.strip()]
+
+    global VERBOSITY
+    if "--quiet" in args:
+        VERBOSITY = "quiet"
+    elif "--verbose" in args:
+        VERBOSITY = "verbose"
+    else:
+        VERBOSITY = cfg["main"].get("verbosity", "normal")
 
     def save_key(new_key: str) -> None:
         cfg["main"]["key"] = new_key
@@ -182,31 +267,33 @@ def main() -> None:
     # from disk stays useful.
     rk = rotate(base, key)
     if rk is None:
-        print("!! Stored key rejected. Re-pair: delete the 'key' line in "
-              "eve_intel_uploader.ini and run again with a new code.")
+        log("!! Stored key rejected. Re-pair: delete the 'key' line in "
+            "eve_intel_uploader.ini and run again with a new code.", "quiet")
         sys.exit(1)
     key = rk
     save_key(key)
+    log("Key rotated for this session.", "verbose")
     last_rotate = time.time()
     logdir = Path(cfg["main"]["logdir"])
-    print(f"Intel uploader — watching {channels}")
-    print(f"Log dir: {logdir}")
+    log(f"Intel uploader — watching {', '.join(channels)}", "quiet")
+    log(f"Log dir: {logdir}", "verbose")
     if not logdir.exists():
-        print("!! Log directory not found. Enable chat logging in EVE (Esc → General → Log Chat to File),")
-        print("   or fix 'logdir' in eve_intel_uploader.ini.")
+        log("!! Log directory not found. Enable chat logging in EVE (Esc → General → Log Chat to File),", "quiet")
+        log("   or fix 'logdir' in eve_intel_uploader.ini.", "quiet")
     # Track file + read position per channel. Start at end of the current file so
     # we only send new lines from launch onward.
     state: dict[str, tuple[str, int]] = {}
     for ch in channels:
         f = latest_log_for(logdir, ch)
         state[ch] = (str(f), f.stat().st_size) if f else ("", 0)
-    print("Watching for new intel… (Ctrl-C to stop)\n")
+    log("Watching for new intel… (Ctrl-C to stop)\n", "normal")
     while True:
         if time.time() - last_rotate > ROTATE_HOURS * 3600:
             rk = rotate(base, key)
             if rk:
                 key = rk
                 save_key(key)
+                log("Key rotated.", "verbose")
             last_rotate = time.time()
         for ch in channels:
             f = latest_log_for(logdir, ch)
@@ -215,15 +302,17 @@ def main() -> None:
             cur_path, cur_pos = state.get(ch, ("", 0))
             if str(f) != cur_path:  # EVE rolled to a new log file (relog)
                 cur_path, cur_pos = str(f), 0
+                log(f"  [{ch}] new log file", "verbose")
             try:
                 lines, new_pos = read_new(f, cur_pos)
             except OSError:
                 continue
             state[ch] = (str(f), new_pos)
             if lines:
+                log(f"  [{ch}] {len(lines)} new line(s) seen", "verbose")
                 n = upload(base, key, ch, lines)
                 if n:
-                    print(f"  [{ch}] uploaded {n} new line(s)")
+                    log(f"  [{ch}] uploaded {n} new line(s)", "normal")
         time.sleep(POLL_SECONDS)
 
 
